@@ -1,0 +1,5 @@
+agents_num: 3
+rounds_num: 3
+judge_temperature: 0.5
+routing_strategy: "consensus_scaling"
+resolutions: ["1.5x", "1x", "0.5x"]

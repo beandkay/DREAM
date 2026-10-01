@@ -1,11 +1,11 @@
-import json
 import random
 import re
 
 from typing import List, Dict, Any, Optional, Tuple
 
 from methods.mad_base import MAD
-from utils.utils import compose_multimodal_input
+from methods.gating_utils import gated_resolution_decision, parse_resolution_str
+from utils.utils import compose_multimodal_input, transform_image_payload
 
 SUPPORTED_STRATEGIES = {"io", "cot", "sbp", "ddcot", "ccot", "pot"}
 
@@ -69,30 +69,7 @@ PROMPT_CCOT_ANSWER_WITH_SCENE_GRAPH = """The scene graph of the image in JSON fo
 Use the image and scene graph as context and answer the following question.
 """
 
-PROMPT_EVAL_ANSWERS = """Here are some candidate answers using different methods. 
-1. [
-Directly answer the question.
-{answer1}
-]
 
-2. [
-First, get the scene graph of the image in JSON format:
-{scene_graph}
-
-Then, use the image and scene graph as context to answer the question.
-{answer2}
-]
-
-3. [
-First, the problem can be deconstructed down to sub-questions. 
-{subquestion_answers}
-
-Then, according to the sub-questions and sub-answers to answer the question.
-{answer3}
-]
-
-Compare these candidate answers and their solving processes to reflect. Please choose the best candidate answer. You should only answer the number (1, 2 or 3) of candidate answers. If all the candidate answers above are incorrect, you should answer the number "4" only.
-"""
 
 PROMPT_EVAL_JSON_ANSWERS = """Here are some candidate answers using different methods. 
 1. [
@@ -253,9 +230,6 @@ class DMAD_Main(MAD):
             return list(self.custom_agent_profiles)
         return list(self.multimodal_agent_profiles if is_multimodal else self.text_agent_profiles)
 
-    def _select_strategies(self, is_multimodal: bool) -> List[str]:
-        profiles = self._select_agent_profiles(is_multimodal)
-        return [profile["strategy"] for profile in profiles]
 
     def _strategy_header(self, strategy: str) -> str:
         desc = STRATEGY_DESCRIPTIONS.get(strategy, STRATEGY_DESCRIPTIONS["io"])
@@ -284,19 +258,29 @@ class DMAD_Main(MAD):
         multimodal_content: Optional[Any],
         model_name: Optional[str] = None,
         temperature_override: Optional[float] = None,
-    ) -> str:
+        return_logprobs: bool = False,
+    ) -> Any:
         self._init_agent_messages(agent_state)
         messages = agent_state["messages"]
         user_content = self._format_user_content(user_text, multimodal_content, agent_state)
         full_messages = messages + [{"role": "user", "content": user_content}]
-        response = self.call_llm(
+        call_result = self.call_llm(
             messages=full_messages,
             temperature=self.agent_temperature if temperature_override is None else temperature_override,
             model_name=model_name,
+            return_logprobs=return_logprobs,
+            seed=(self.seed * 10 + agent_state.get("id", 0) + 1 if getattr(self, "seed", None) is not None else agent_state.get("id", 0) + 1),
         )
+        
+        if return_logprobs:
+            response, anll, logprobs = call_result
+        else:
+            response = call_result
+            
         messages.append({"role": "user", "content": user_content})
         messages.append({"role": "assistant", "content": response})
-        return response
+        
+        return call_result if return_logprobs else response
 
     def _apply_refinement_hint(
         self,
@@ -339,7 +323,8 @@ class DMAD_Main(MAD):
         multimodal_content: Optional[Any],
         agent_state: Dict[str, Any],
         agent_profile: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict[str, Any]]:
+        return_logprobs: bool = False,
+    ) -> Tuple[Any, Dict[str, Any]]:
         agent_profile = agent_profile or {}
         model_override = agent_profile.get("model_name")
         temp_override = agent_profile.get("temperature")
@@ -354,17 +339,24 @@ class DMAD_Main(MAD):
                 agent_state,
                 model_override,
                 temp_override,
+                return_logprobs,
             )
         prompt = self._build_agent_prompt(strategy, query, peer_summaries, previous_answer)
-        response = self._send_with_history(
+        result = self._send_with_history(
             agent_state,
             prompt,
             None,
             model_name=model_override,
             temperature_override=temp_override,
+            return_logprobs=return_logprobs,
         )
+        if return_logprobs:
+            response, anll, _ = result
+        else:
+            response = result
+            
         agent_state["answer"] = response.strip()
-        return response, agent_state
+        return result, agent_state
 
     def _call_multimodal_strategy(
         self,
@@ -376,7 +368,8 @@ class DMAD_Main(MAD):
         agent_state: Dict[str, Any],
         model_override: Optional[str] = None,
         temp_override: Optional[float] = None,
-    ) -> Tuple[str, Dict[str, Any]]:
+        return_logprobs: bool = False,
+    ) -> Tuple[Any, Dict[str, Any]]:
         if multimodal_content is None:
             raise ValueError("Multimodal strategy requires multimodal content.")
         self._init_agent_messages(agent_state)
@@ -387,15 +380,17 @@ class DMAD_Main(MAD):
                 "End with 'Final: <answer>'."
             )
             prompt = self._apply_refinement_hint(base, peer_summaries, previous_answer)
-            response = self._send_with_history(
+            result = self._send_with_history(
                 agent_state,
                 prompt,
                 multimodal_content,
                 model_name=model_override,
                 temperature_override=temp_override,
+                return_logprobs=return_logprobs,
             )
+            response = result[0] if return_logprobs else result
             agent_state["answer"] = response.strip()
-            return response, agent_state
+            return result, agent_state
 
         if strategy == "ccot":
             sg_prompt = f"Question:\n{query}\n\n{PROMPT_CCOT_MAKE_SCENE_GRAPH}"
@@ -412,15 +407,20 @@ class DMAD_Main(MAD):
             answer_prompt = PROMPT_CCOT_ANSWER_WITH_SCENE_GRAPH.format(scene_graph=scene_graph)
             answer_prompt += f"Question:\n{query}\n\n{CHOOSE_ONE_OPTION_PROMPT}"
             answer_prompt = self._apply_refinement_hint(answer_prompt, peer_summaries, previous_answer)
-            answer = self._send_with_history(
+            result = self._send_with_history(
                 agent_state,
                 answer_prompt,
                 None,
                 model_name=model_override,
                 temperature_override=temp_override,
-            ).strip()
+                return_logprobs=return_logprobs,
+            )
+            answer = result[0] if return_logprobs else result
+            answer = answer.strip()
             agent_state["answer"] = answer
             merged = PROMPT_CCOT_SOLUTION.format(scene_graph=scene_graph, answer=answer).strip()
+            if return_logprobs:
+                return (merged, result[1], result[2]), agent_state
             return merged, agent_state
 
         if strategy == "ddcot":
@@ -439,27 +439,33 @@ class DMAD_Main(MAD):
             answer_prompt += f"\n{CHOOSE_ONE_OPTION_PROMPT}"
             answer_prompt = f"Question:\n{query}\n\n{answer_prompt}"
             answer_prompt = self._apply_refinement_hint(answer_prompt, peer_summaries, previous_answer)
-            answer = self._send_with_history(
+            result = self._send_with_history(
                 agent_state,
                 answer_prompt,
                 None,
                 model_name=model_override,
                 temperature_override=temp_override,
-            ).strip()
+                return_logprobs=return_logprobs,
+            )
+            answer = result[0] if return_logprobs else result
+            answer = answer.strip()
             agent_state["answer"] = answer
             merged = PROMPT_DDCOT_SOLUTION.format(subquestion_answers=subanswers, answer=answer).strip()
+            if return_logprobs:
+                return (merged, result[1], result[2]), agent_state
             return merged, agent_state
 
         # Fall back to text handling if other strategy is specified.
         prompt = self._build_agent_prompt(strategy, query, peer_summaries, previous_answer)
-        response = self._send_with_history(
+        result = self._send_with_history(
             agent_state,
             prompt,
             None,
             model_name=model_override,
             temperature_override=temp_override,
+            return_logprobs=return_logprobs,
         )
-        return response, agent_state
+        return result, agent_state
 
     def _multimodal_judge(
         self,
@@ -573,60 +579,252 @@ class DMAD_Main(MAD):
         active_strategies = [profile["strategy"] for profile in active_profiles]
         num_agents = len(active_profiles)
         agent_histories: List[List[str]] = [[] for _ in range(num_agents)]
-        agent_states: List[Dict[str, Any]] = [dict() for _ in range(num_agents)]
+        agent_states: List[Dict[str, Any]] = [{"id": i} for i in range(num_agents)]
         latest_answers: List[str] = [""] * num_agents
 
-        # Initial generation
+        cfg = getattr(self, "method_config", {}) or {}
+        routing_strategy = cfg.get("routing_strategy")
+        if routing_strategy in ("gated_mix_res", "consensus_scaling", "mix_res"):
+            resolutions = cfg.get("resolutions", ["2x", "1x", "0.5x"])
+        else:
+            resolutions = [None]
+
+        gating_threshold = float(cfg.get("gated_anll_threshold", 0.2))
+        gating_metadata = None
+
+        parsed_res = []
+        for r in resolutions:
+            if isinstance(r, str):
+                parsed_res.extend(parse_resolution_str(r))
+            else:
+                parsed_res.append(r)
+        
+        agent_resolutions = []
+        if routing_strategy == "consensus_scaling":
+            agent_resolutions = [str(parsed_res[0]) for _ in range(num_agents)]
+        else:
+            for i in range(num_agents):
+                agent_resolutions.append(str(parsed_res[i]) if i < len(parsed_res) else (str(parsed_res[-1]) if parsed_res else "None"))
+
+        is_gated = routing_strategy == "gated_mix_res" and is_multimodal and multimodal_content is not None
+        gated_probe_anlls = None
+
+        if is_gated and len(parsed_res) > 1:
+            gated_probe_anlls = []
+            agent_answers = []
+            for i, profile in enumerate(active_profiles):
+                strat = profile["strategy"]
+                res_for_probe = parse_resolution_str(agent_resolutions[i]) if agent_resolutions[i] != "None" else None
+                active_multimodal = transform_image_payload(
+                    multimodal_content, resolutions=res_for_probe
+                )
+                result, _ = self._call_agent(
+                    "cot",
+                    query_for_agent,
+                    peer_summaries=None,
+                    previous_answer=None,
+                    multimodal_content=active_multimodal,
+                    agent_state={"id": i},
+                    agent_profile={**profile, "temperature": 0.0},  # Force greedy decoding
+                    return_logprobs=True
+                )
+                resp, anll, _ = result
+                gated_probe_anlls.append(anll)
+                agent_answers.append(resp)
+
+            adaptive = cfg.get("adaptive_threshold", False)
+            decision = gated_resolution_decision(
+                gated_probe_anlls, agent_resolutions, agent_answers, num_agents,
+                gating_threshold, adaptive_threshold=adaptive, debug=self.debug,
+            )
+            routing_strategy = decision["routing_strategy"]
+            if routing_strategy == "mix_res":
+                agent_resolutions = decision["initial_res_list"]
+            else:
+                agent_resolutions = decision["new_resolutions"]
+            gating_metadata = decision["metadata"]
+            # After gating, use consensus_scaling for the debate (no further rotation)
+            routing_strategy = "consensus_scaling"
+
+        # --- Generalized Perceiver Step ---
+        if is_multimodal and self.method_config.get("use_perceiver", False):
+            consensed_res = None
+            if routing_strategy == "mix_res" and decision.get("initial_res_list"):
+                consensed_res = decision["initial_res_list"][0]
+            elif agent_resolutions:
+                def get_res_val(r):
+                    try:
+                        return float(str(r).strip('x'))
+                    except Exception:
+                        return 0.0
+                consensed_res = max(agent_resolutions, key=get_res_val)
+
+            description = self._perceive_image(query, multimodal_content, consensed_res)
+            query = f"{query}\n\nVisual Description of the image: {description}"
+            query_for_agent = f"{query_for_agent}\n\nVisual Description of the image: {description}"
+            
+            is_multimodal = False
+            multimodal_content = None
+            
+            # Re-select active profiles since it's now text-only
+            active_profiles = self._select_agent_profiles(is_multimodal)
+            active_strategies = [profile["strategy"] for profile in active_profiles]
+
+        agent_answer_history = [[] for _ in range(num_agents)]
+
+        # Initial generation (Round 1)
+        round1_anlls = []
         for i, profile in enumerate(active_profiles):
             strat = profile["strategy"]
-            resp, agent_states[i] = self._call_agent(
+            res_val = parse_resolution_str(agent_resolutions[i]) if agent_resolutions[i] != "None" else None
+            if isinstance(res_val, list) and len(res_val) == 1 and res_val[0] == "None":
+                res_val = None
+                
+            active_multimodal = transform_image_payload(
+                multimodal_content, resolutions=res_val
+            ) if is_multimodal else None
+            
+            result, agent_states[i] = self._call_agent(
                 strat,
                 query_for_agent,
                 peer_summaries=None,
                 previous_answer=None,
-                multimodal_content=multimodal_content,
+                multimodal_content=active_multimodal,
                 agent_state=agent_states[i],
                 agent_profile=profile,
+                return_logprobs=True
             )
+            resp, anll, _ = result
+            agent_states[i]["latest_anll"] = anll
+            round1_anlls.append(anll)
             agent_histories[i].append(resp)
             latest_answers[i] = resp
+            agent_answer_history[i].append({
+                "round": 1,
+                "resolution": agent_resolutions[i],
+                "answer": resp,
+                "anll": anll,
+            })
 
         rounds_completed = 1
 
         # Refinement rounds
-        for _ in range(1, self.max_round):
+        for round_idx in range(1, self.max_round):
+            if is_multimodal and routing_strategy == "consensus_scaling" and not is_gated:
+                for j in range(num_agents):
+                    current_res = agent_resolutions[j]
+                    if current_res in parsed_res:
+                        current_level = parsed_res.index(current_res)
+                    else:
+                        current_level = -1
+                    agent_resolutions[j] = str(parsed_res[(current_level + 1) % len(parsed_res)])
+
             for i, profile in enumerate(active_profiles):
                 strat = profile["strategy"]
+                
+                # Sort peer summaries by resolution value (highest to lowest resolution)
+                peer_indices = [idx for idx in range(num_agents) if idx != i]
+                def get_res_val(res_str):
+                    res_str = str(res_str)
+                    try:
+                        return float(res_str.strip('x'))
+                    except Exception:
+                        return 0.0
+
+                peer_indices.sort(key=lambda idx: get_res_val(agent_resolutions[idx]), reverse=True)
+
                 peer_summary = "\n\n".join(
                     [
-                        f"Agent {idx} ({active_strategies[idx]}):\n{latest_answers[idx]}"
-                        for idx in range(num_agents)
-                        if idx != i
+                        f"Agent {idx+1} ({active_strategies[idx]}):\n{latest_answers[idx]}"
+                        for idx in peer_indices
                     ]
                 )
-                resp, agent_states[i] = self._call_agent(
+                
+                res_val = parse_resolution_str(agent_resolutions[i]) if agent_resolutions[i] != "None" else None
+                if isinstance(res_val, list) and len(res_val) == 1 and res_val[0] == "None":
+                    res_val = None
+                    
+                active_multimodal = transform_image_payload(
+                    multimodal_content, resolutions=res_val
+                ) if is_multimodal else None
+
+                result, agent_states[i] = self._call_agent(
                     strat,
                     query_for_agent,
                     peer_summaries=peer_summary,
                     previous_answer=latest_answers[i],
-                    multimodal_content=multimodal_content,
+                    multimodal_content=active_multimodal,
                     agent_state=agent_states[i],
                     agent_profile=profile,
+                    return_logprobs=True
                 )
+                resp, anll, _ = result
+                agent_states[i]["latest_anll"] = anll
                 agent_histories[i].append(resp)
                 latest_answers[i] = resp
+                agent_answer_history[i].append({
+                    "round": round_idx + 1,
+                    "resolution": agent_resolutions[i],
+                    "answer": resp,
+                    "anll": anll,
+                })
 
             rounds_completed += 1
 
-        final_outputs = [ans.strip() for ans in latest_answers]
+        # History-aware answer selection with probe-calibrated rescue (aligned with llm_debate).
+        # delta = alpha * sigma(0)_ANLL when the gated probe ran for this sample; otherwise
+        # falls back to the ratio+floor heuristic, same as llm_debate's aggregate_with_history.
+        # Set enable_answer_rescue: false in the method config to disable this (ablation).
+        enable_rescue = cfg.get("enable_answer_rescue", True)
+        alpha = cfg.get("anll_rescue_alpha", 0.5)
+        anll_threshold = cfg.get("anll_fallback_threshold", 1.5)
+        anll_fallback_min_anll = cfg.get("anll_fallback_min_anll", 0.15)
+
+        delta = None
+        if enable_rescue and gated_probe_anlls:
+            valid_probe = [a for a in gated_probe_anlls if a is not None]
+            if len(valid_probe) > 1:
+                mean_probe = sum(valid_probe) / len(valid_probe)
+                variance = sum((a - mean_probe) ** 2 for a in valid_probe) / len(valid_probe)
+                sigma0 = variance ** 0.5
+                delta = alpha * sigma0
+
+        selected_outputs = []
+        for i, history in enumerate(agent_answer_history):
+            final_entry = history[-1]
+            final_anll = final_entry.get('anll')
+
+            best_prior_entry = None
+            min_prior_anll = float('inf')
+            for entry in history[:-1]:
+                anll = entry.get('anll')
+                if anll is not None and anll < min_prior_anll:
+                    min_prior_anll = anll
+                    best_prior_entry = entry
+
+            rescued = False
+            if enable_rescue and final_anll is not None and best_prior_entry is not None:
+                if delta is not None:
+                    rescued = (final_anll - min_prior_anll) > delta
+                else:
+                    rescued = (final_anll > min_prior_anll * anll_threshold
+                               and final_anll > anll_fallback_min_anll)
+
+            chosen_entry = best_prior_entry if rescued else final_entry
+            selected_outputs.append(chosen_entry['answer'].strip())
+
+        final_outputs = selected_outputs
 
         if is_multimodal:
+            judge_multimodal = transform_image_payload(
+                multimodal_content, resolutions=parsed_res[-1] if parsed_res else None
+            )
             agg = self._multimodal_judge(
                 query_for_agent,
                 active_strategies,
                 agent_states,
                 final_outputs,
-                multimodal_content,
+                judge_multimodal,
             )
         else:
             agg = self._text_judge(query_for_agent, final_outputs)
@@ -635,7 +833,10 @@ class DMAD_Main(MAD):
             "strategies": active_strategies,
             "rounds_completed": rounds_completed,
             "agent_histories": agent_histories if self.return_all else None,
+            "agent_answer_history": agent_answer_history,
             "final_answers": final_outputs,
             "aggregation": agg,
         }
+        if gating_metadata:
+            trace["gating_metadata"] = gating_metadata
         return {"response": agg["final_answer"], "trace": trace}

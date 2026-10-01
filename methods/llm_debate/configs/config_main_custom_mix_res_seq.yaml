@@ -1,0 +1,9 @@
+agents_num: 3
+rounds_num: 3
+agents:
+  - name: "Agent 1 (2x -> 1x -> 0.5x)"
+    resolutions: ["1.5x", "1x", "0.5x"]
+  - name: "Agent 2 (1x -> 0.5x -> 2x)"
+    resolutions: ["1x", "0.5x", "2x"]
+  - name: "Agent 3 (0.5x -> 2x -> 1x)"
+    resolutions: ["0.5x", "2x", "1x"]

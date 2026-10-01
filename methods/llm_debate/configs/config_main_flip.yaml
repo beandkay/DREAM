@@ -1,0 +1,9 @@
+agents_num: 3
+rounds_num: 2
+agents:
+  - name: "Agent 1 (Mixed Flips)"
+    flips: [null, "hflip", "vflip"]
+  - name: "Agent 2 (Mixed Flips)"
+    flips: [null, "hflip", "vflip"]
+  - name: "Agent 3 (Mixed Flips)"
+    flips: [null, "hflip", "vflip"]

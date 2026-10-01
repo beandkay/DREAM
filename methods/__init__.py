@@ -4,6 +4,7 @@ from .dmad import DMAD_Main
 from .io import IO_Main
 from .self_consistency import SelfConsistency
 from .div_mad import DivMADMain
+from .mad_base import MAD
 
 method2class = {
     "cot": CoT,
@@ -12,7 +13,9 @@ method2class = {
     "dmad": DMAD_Main,
     "io": IO_Main,
     "self_consistency": SelfConsistency,
+    "mad": MAD,
 }
+
 
 def get_method_class(method_name, dataset_name=None):
     

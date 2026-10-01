@@ -1,0 +1,24 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# Job/server logs
+slurm-*.out
+slurm_*.out
+slurm_*.err
+vllm_server_*.log
+
+# Debug-mode scratch output
+debug_results_*.json
+
+# Regenerated analysis outputs
+gated_strategy_analysis/
+gated_strategy_analysis_qwen2.5-vl-7b/
+
+# Machine-specific symlinks
+/results
+datasets/data
+render_scientific_figures.py
+parse_results.py
+clean_results.py
+analyze_gated_strategy.py

@@ -1,0 +1,12 @@
+agents_num: 3
+rounds_num: 2
+agents:
+  - name: "Agent 1 (Original)"
+    resolutions: "1x"
+  - name: "Agent 2 (Shifted + Low-res)"
+    resolutions: "0.5x"
+    shifts: "right10"
+  - name: "Agent 3 (Cropped + Blurred)"
+    resolutions: "1x"
+    crops: "0.8"
+    blurs: 2

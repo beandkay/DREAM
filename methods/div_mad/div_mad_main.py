@@ -10,6 +10,7 @@ from utils.utils import (
     prepare_multimodal_content,
     compose_multimodal_input,
 )
+from ..gating_utils import gated_resolution_decision, parse_resolution_str
 
 NAME_LIST = [
     "Affirmative side",
@@ -34,7 +35,7 @@ class DivMADMain(MAD):
         self.judge_prompt_last2 = ""
         self.agent_profiles = self._build_agent_profiles()
         self.judge_model_name = self.method_config.get("judge_model_name")
-        self.judge_temperature = self.method_config.get("judge_temperature")
+        self.judge_temperature = float(self.method_config.get("judge_temperature", 0.5))
         self._maybe_announce_agent_models()
 
     def _build_agent_profiles(self):
@@ -83,7 +84,14 @@ class DivMADMain(MAD):
 
     def _call_agent(self, agent, **kwargs):
         """Wrapper around call_llm that honors per-agent model overrides."""
-        return self.call_llm(model_name=agent.model_name, temperature=agent.temperature, **kwargs)
+        agent_idx = getattr(agent, "id", 0)
+        temp = kwargs.pop("temperature", agent.temperature)
+        return self.call_llm(
+            model_name=agent.model_name, 
+            temperature=temp, 
+            seed=(self.seed * 10 + agent_idx + 1 if getattr(self, "seed", None) is not None else agent_idx + 1),
+            **kwargs
+        )
 
     def is_valid_answer(self, debate_answer):
         """Check if debate_answer is a valid answer (not a continuation message or side name)"""
@@ -249,18 +257,13 @@ class DivMADMain(MAD):
                     # Replace actual newlines in string values with \n
                     # This is a more aggressive fix for malformed JSON
                     try:
-                        # Try to escape control characters in string values
-                        # Find string values and escape control chars
-                        fixed2 = fixed
-                        # Replace unescaped newlines in string values (but not in JSON structure)
-                        # This is a heuristic: look for patterns like "..." with newlines inside
-                        import re as re_module
+                        # Escape control characters in string values
                         # Escape control characters (except those already escaped)
                         # Replace \n (actual newline) with \\n in string values
                         # But be careful not to break valid JSON
-                        fixed2 = re_module.sub(r'(?<!\\)\n', r'\\n', fixed2)
-                        fixed2 = re_module.sub(r'(?<!\\)\r', r'\\r', fixed2)
-                        fixed2 = re_module.sub(r'(?<!\\)\t', r'\\t', fixed2)
+                        fixed2 = re.sub(r'(?<!\\)\n', r'\\n', fixed)
+                        fixed2 = re.sub(r'(?<!\\)\r', r'\\r', fixed2)
+                        fixed2 = re.sub(r'(?<!\\)\t', r'\\t', fixed2)
                         return json.loads(fixed2)
                     except (json.JSONDecodeError, ValueError) as e3:
                         if getattr(self, "debug", False):
@@ -286,14 +289,16 @@ class DivMADMain(MAD):
         if len(self.agent_profiles) < 3:
             raise ValueError("MAD requires at least three agent profiles: affirmative, negative, and moderator.")
 
-        self.players = [
-            Agent(
+        self.players = []
+        for i, profile in enumerate(self.agent_profiles):
+            agent = Agent(
                 profile["name"],
                 model_name=profile.get("model_name"),
                 temperature=profile.get("temperature"),
             )
-            for profile in self.agent_profiles
-        ]
+            agent.id = i
+            self.players.append(agent)
+            
         self.affirmative = self.players[0]
         self.negative = self.players[1]
         self.moderator = self.players[2]
@@ -326,16 +331,20 @@ class DivMADMain(MAD):
         self.moderator.add_memory(self.mod_ans)
         self.mod_ans = self.parse_json_string(self.mod_ans)
 
-    def init_agents_multimodal(self, multimodal_content=None):
+    def init_agents_multimodal(self, multimodal_content=None, per_agent_resolutions=None):
         """Initialize agents with multimodal support"""
         self.affirmative.set_meta_prompt(self.player_meta_prompt)
         self.negative.set_meta_prompt(self.player_meta_prompt)
         self.moderator.set_meta_prompt(self.moderator_prompt)
 
+        res_aff = per_agent_resolutions[0] if per_agent_resolutions else None
+        res_neg = per_agent_resolutions[1] if per_agent_resolutions else None
+        res_mod = per_agent_resolutions[2] if per_agent_resolutions else None
+
         # An affirmative agent starts the debate
         self.affirmative.add_event(self.affirmative_prompt)
         if multimodal_content is not None:
-            aff_messages = self.prepare_multimodal_messages(self.affirmative.memory_lst, multimodal_content)
+            aff_messages = self.prepare_multimodal_messages(self.affirmative.memory_lst, multimodal_content, res_aff)
             self.aff_ans = self._call_agent(agent=self.affirmative, messages=aff_messages)
         else:
             self.aff_ans = self._call_agent(agent=self.affirmative, messages=self.affirmative.memory_lst)
@@ -346,7 +355,7 @@ class DivMADMain(MAD):
         self.negative.add_event(NEGATIVE_PROMPT.replace('##aff_ans##', self.aff_ans))
         if multimodal_content is not None:
             # Negative agent should see the same multimodal content (image + question)
-            neg_messages = self.prepare_multimodal_messages(self.negative.memory_lst, multimodal_content)
+            neg_messages = self.prepare_multimodal_messages(self.negative.memory_lst, multimodal_content, res_neg)
             self.neg_ans = self._call_agent(agent=self.negative, messages=neg_messages)
         else:
             self.neg_ans = self._call_agent(agent=self.negative, messages=self.negative.memory_lst)
@@ -358,7 +367,7 @@ class DivMADMain(MAD):
             .replace('##neg_ans##', self.neg_ans)
             .replace('##round##', 'first')
         )
-        moderator_messages = self.prepare_multimodal_messages(self.moderator.memory_lst, multimodal_content)
+        moderator_messages = self.prepare_multimodal_messages(self.moderator.memory_lst, multimodal_content, res_mod)
         self.mod_ans = self._call_agent(agent=self.moderator, messages=moderator_messages)
         self.mod_ans = re.sub(r"```json|```", "", self.mod_ans).strip()
         self.moderator.add_memory(self.mod_ans)
@@ -371,12 +380,18 @@ class DivMADMain(MAD):
         }
         return dct.get(num, f"{num}th")
 
-    def prepare_multimodal_messages(self, agent_memory, multimodal_content=None):
+    def prepare_multimodal_messages(self, agent_memory, multimodal_content=None, resolution=None):
         """Attach image content to the latest user message for the given memory."""
         if multimodal_content is None:
             return agent_memory
 
         agent_messages = deepcopy(agent_memory)
+        
+        content_to_use = multimodal_content
+        if resolution is not None and resolution != "None" and isinstance(content_to_use, list) and len(content_to_use) > 0:
+            content_to_use = deepcopy(multimodal_content)
+            if isinstance(content_to_use[0], dict) and "image" in content_to_use[0]:
+                content_to_use[0]["resolution"] = resolution
 
         for idx in range(len(agent_messages) - 1, -1, -1):
             msg = agent_messages[idx]
@@ -384,7 +399,7 @@ class DivMADMain(MAD):
                 continue
 
             msg_text = msg["content"] if isinstance(msg["content"], str) else ""
-            msg["content"] = compose_multimodal_input(msg_text, multimodal_content)
+            msg["content"] = compose_multimodal_input(msg_text, content_to_use)
             break
 
         return agent_messages
@@ -415,12 +430,143 @@ class DivMADMain(MAD):
         self.init_prompt(debate_topic)
         self.create_agents()
         self.debate_answer = ""
+        
+        # Gated resolution logic for DivMAD
+        gating_metadata = None
+        per_agent_resolutions = None
+        is_gated = False
+        
         if is_multimodal:
-            self.init_agents_multimodal(multimodal_content)
+            routing = self.method_config.get("routing_strategy")
+            if routing == "gated_mix_res":
+                # Standard probe resolution ladder for gauging confidence (not from agent configs)
+                probe_ladder = self.method_config.get("probe_resolutions", ["0.5x", "1x", "2x"])
+                if not isinstance(probe_ladder, list):
+                    probe_ladder = parse_resolution_str(str(probe_ladder))
+            
+                num_agents = self.num_players
+                initial_res = []
+                for i in range(num_agents):
+                    initial_res.append(probe_ladder[i % len(probe_ladder)])
+                    
+                probe_anlls = []
+                probe_answers = []
+                probe_res = []
+
+                # Standard CoT prompt without debater/moderator persona for probing
+                cot_probe_prompt = f"{debate_topic}\n\nSolve the problem step by step before giving your final answer."
+                
+                # Run the probe for all N agents
+                for i in range(num_agents):
+                    agent = self.players[i]
+                    res = initial_res[i]
+                    
+                    # Remove persona for probe round
+                    agent.set_meta_prompt("")
+                    agent.memory_lst = []
+                    
+                    agent.add_event(cot_probe_prompt)
+                    
+                    agent_mm_content = deepcopy(multimodal_content)
+                    if isinstance(agent_mm_content, list) and len(agent_mm_content) > 0:
+                        if isinstance(agent_mm_content[0], dict) and "image" in agent_mm_content[0]:
+                            agent_mm_content[0]["resolution"] = res
+                            
+                    probe_messages = self.prepare_multimodal_messages(agent.memory_lst, agent_mm_content)
+                    
+                    call_result = self._call_agent(
+                        agent=agent, 
+                        messages=probe_messages, 
+                        temperature=0.0,
+                        return_logprobs=True
+                    )
+                    ans, anll, _ = call_result
+
+                    probe_answers.append(ans)
+                    probe_res.append(res)
+                    probe_anlls.append(anll if anll is not None else 999.0)
+
+                    # Clear memory for actual debate
+                    agent.memory_lst = []
+
+                threshold = self.method_config.get("gated_anll_threshold", 0.2)
+                adaptive = self.method_config.get("adaptive_threshold", False)
+                decision = gated_resolution_decision(
+                    round_anlls=probe_anlls,
+                    agent_resolutions=probe_res,
+                    agent_answers=probe_answers,
+                    num_agents=num_agents,
+                    threshold=threshold,
+                    adaptive_threshold=adaptive,
+                    debug=self.debug,
+                )
+                
+                per_agent_resolutions = decision["new_resolutions"]
+                gating_metadata = decision["metadata"]
+                is_gated = True
+                
+            elif routing == "mix_res":
+                mix_ladder = self.method_config.get("resolutions", ["2x", "1x", "0.5x"])
+                if not isinstance(mix_ladder, list):
+                    mix_ladder = parse_resolution_str(str(mix_ladder))
+                per_agent_resolutions = [
+                    mix_ladder[i % len(mix_ladder)] for i in range(self.num_players)
+                ]
+            elif routing == "consensus_scaling":
+                mix_ladder = self.method_config.get("resolutions", ["2x", "1x", "0.5x"])
+                if not isinstance(mix_ladder, list):
+                    mix_ladder = parse_resolution_str(str(mix_ladder))
+                per_agent_resolutions = [mix_ladder[0] for _ in range(self.num_players)]
+
+        # --- Generalized Perceiver Step ---
+        if is_multimodal and self.method_config.get("use_perceiver", False):
+            consensed_res = None
+            if routing == "mix_res" and is_gated and decision and decision.get("initial_res_list"):
+                consensed_res = decision["initial_res_list"][0]
+            elif per_agent_resolutions:
+                def get_res_val(r):
+                    try:
+                        return float(str(r).strip('x'))
+                    except Exception:
+                        return 0.0
+                consensed_res = max(per_agent_resolutions, key=get_res_val)
+
+            description = self._perceive_image(debate_topic, multimodal_content, consensed_res)
+            debate_topic = f"{debate_topic}\n\nVisual Description of the image: {description}"
+            
+            # Re-initialize prompts with updated text-only topic
+            self.init_prompt(debate_topic)
+            
+            is_multimodal = False
+            multimodal_content = None
+
+        if is_multimodal:
+            self.init_agents_multimodal(multimodal_content, per_agent_resolutions)
         else:
             self.init_agents()
+            
+        res_aff = per_agent_resolutions[0] if per_agent_resolutions else None
+        res_neg = per_agent_resolutions[1] if per_agent_resolutions else None
+        res_mod = per_agent_resolutions[2] if per_agent_resolutions else None
 
         for round in range(self.max_round - 1):
+            if is_multimodal and self.method_config.get("routing_strategy") == "consensus_scaling" and not is_gated:
+                mix_ladder = self.method_config.get("resolutions", ["2x", "1x", "0.5x"])
+                if not isinstance(mix_ladder, list):
+                    mix_ladder = parse_resolution_str(str(mix_ladder))
+                
+                for j in range(self.num_players):
+                    current_res = per_agent_resolutions[j]
+                    if current_res in mix_ladder:
+                        current_level = mix_ladder.index(current_res)
+                    else:
+                        current_level = -1
+                    per_agent_resolutions[j] = mix_ladder[(current_level + 1) % len(mix_ladder)]
+                    
+                res_aff = per_agent_resolutions[0]
+                res_neg = per_agent_resolutions[1]
+                res_mod = per_agent_resolutions[2]
+
             # Check if moderator provided a valid answer
             if self.is_valid_answer(self.mod_ans.get("debate_answer", "")):
                 break
@@ -428,7 +574,7 @@ class DivMADMain(MAD):
                 # set the prompt for the affirmative side and update memory
                 self.affirmative.add_event(DEBATE_PROMPT.replace('##oppo_ans##', self.neg_ans))
                 if multimodal_content is not None:
-                    aff_messages = self.prepare_multimodal_messages(self.affirmative.memory_lst, multimodal_content)
+                    aff_messages = self.prepare_multimodal_messages(self.affirmative.memory_lst, multimodal_content, res_aff)
                     self.aff_ans = self._call_agent(agent=self.affirmative, messages=aff_messages)
                 else:
                     self.aff_ans = self._call_agent(agent=self.affirmative, messages=self.affirmative.memory_lst)
@@ -437,7 +583,7 @@ class DivMADMain(MAD):
                 # set the prompt for the negative side and update memory
                 self.negative.add_event(DEBATE_PROMPT.replace('##oppo_ans##', self.aff_ans))
                 if multimodal_content is not None:
-                    neg_messages = self.prepare_multimodal_messages(self.negative.memory_lst, multimodal_content)
+                    neg_messages = self.prepare_multimodal_messages(self.negative.memory_lst, multimodal_content, res_neg)
                     self.neg_ans = self._call_agent(agent=self.negative, messages=neg_messages)
                 else:
                     self.neg_ans = self._call_agent(agent=self.negative, messages=self.negative.memory_lst)
@@ -449,7 +595,7 @@ class DivMADMain(MAD):
                     .replace('##neg_ans##', self.neg_ans)
                     .replace('##round##', self.round_dct(round+2))
                 )
-                moderator_messages = self.prepare_multimodal_messages(self.moderator.memory_lst, multimodal_content)
+                moderator_messages = self.prepare_multimodal_messages(self.moderator.memory_lst, multimodal_content, res_mod)
                 self.mod_ans = self._call_agent(agent=self.moderator, messages=moderator_messages)
                 self.moderator.add_memory(self.mod_ans)
                 self.mod_ans = self.parse_json_string(self.mod_ans)
@@ -457,34 +603,7 @@ class DivMADMain(MAD):
         # Check if moderator provided a valid answer
         debate_answer = self.mod_ans.get("debate_answer", "")
         
-        # # If debate_answer is "Affirmative" or "Negative", try to extract actual answer from the supported side
-        # if debate_answer.lower() in ["affirmative", "negative"]:
-        #     supported_side = self.mod_ans.get("Supported Side", "").lower()
-        #     if supported_side == "affirmative":
-        #         # Try to extract answer from affirmative side's response
-        #         # Look for boxed answers or final answers in the affirmative response
-        #         aff_response = self.aff_ans
-        #         # Try to find boxed answer like \boxed{A} or \boxed{E}
-        #         boxed_match = re.search(r'\\boxed\{([^}]+)\}', aff_response)
-        #         if boxed_match:
-        #             debate_answer = boxed_match.group(1).strip()
-        #         else:
-        #             # Try to find answer at the end (common patterns)
-        #             # Look for patterns like "answer is A" or "correct answer is E"
-        #             answer_match = re.search(r'(?:answer|correct answer|answer is|correct answer is)[\s:]+([A-E]|\d+)', aff_response, re.IGNORECASE)
-        #             if answer_match:
-        #                 debate_answer = answer_match.group(1).strip()
-        #     elif supported_side == "negative":
-        #         # Try to extract answer from negative side's response
-        #         neg_response = self.neg_ans
-        #         boxed_match = re.search(r'\\boxed\{([^}]+)\}', neg_response)
-        #         if boxed_match:
-        #             debate_answer = boxed_match.group(1).strip()
-        #         else:
-        #             answer_match = re.search(r'(?:answer|correct answer|answer is|correct answer is)[\s:]+([A-E]|\d+)', neg_response, re.IGNORECASE)
-        #             if answer_match:
-        #                 debate_answer = answer_match.group(1).strip()
-        
+
         if self.is_valid_answer(debate_answer):
             self.debate_answer = debate_answer
             self.config.update(self.mod_ans)
@@ -492,19 +611,21 @@ class DivMADMain(MAD):
         else:
             # let the judge decide the debate
             judge_player = Agent(name='Judge', model_name=self.judge_model_name, temperature=self.judge_temperature)
-            aff_ans = self.affirmative.memory_lst[2]['content']
-            neg_ans = self.negative.memory_lst[2]['content']
+            
+            # Use final round answers (memory_lst[-1]) instead of hardcoded round 1 (memory_lst[2])
+            aff_ans = self.affirmative.memory_lst[-1]['content']
+            neg_ans = self.negative.memory_lst[-1]['content']
 
             # set the prompt for the judge and update memory
             judge_player.set_meta_prompt(self.moderator_prompt)
             judge_player.add_event(JUDGE_PROMPT_LAST1.replace('##aff_ans##', aff_ans).replace('##neg_ans##', neg_ans))
-            judge_messages = self.prepare_multimodal_messages(judge_player.memory_lst, multimodal_content)
+            judge_messages = self.prepare_multimodal_messages(judge_player.memory_lst, multimodal_content, res_mod)
             ans = self._call_agent(agent=judge_player, messages=judge_messages)
             judge_player.add_memory(ans)
 
             # let the judge decide the debate and give the final answer
             judge_player.add_event(self.judge_prompt_last2)
-            judge_messages = self.prepare_multimodal_messages(judge_player.memory_lst, multimodal_content)
+            judge_messages = self.prepare_multimodal_messages(judge_player.memory_lst, multimodal_content, res_mod)
             ans = self._call_agent(agent=judge_player, messages=judge_messages)
             judge_player.add_memory(ans)
 
@@ -516,15 +637,25 @@ class DivMADMain(MAD):
             self.config.update(ans)
             self.players.append(judge_player)
 
-        # # Optional: Collect the complete debate process
+        # Collect the complete debate process with debug metadata
         debate_process = {
             "affirmative_history": self.affirmative.memory_lst,
             "negative_history": self.negative.memory_lst,
             "moderator_history": self.moderator.memory_lst,
             "base_answer": self.base_answer,
             "final_answer": self.debate_answer,
-            "debate_config": self.config
+            "debate_config": self.config,
+            "resolutions": per_agent_resolutions if is_multimodal else None,
+            "debate_answers": {
+                "affirmative": self.aff_ans,
+                "negative": self.neg_ans,
+                "moderator": self.debate_answer
+            }
         }
+        
+        if gating_metadata:
+            debate_process["gating_metadata"] = gating_metadata
+            self.config.update(gating_metadata)
         
         return {
             "response": self.debate_answer,

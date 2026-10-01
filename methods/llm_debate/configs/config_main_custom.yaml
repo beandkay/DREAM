@@ -1,0 +1,11 @@
+agents_num: 3
+rounds_num: 3
+routing_strategy: "consensus_scaling"
+resolution_ladder: ["2x", "1x", "0.5x"]
+agents:
+  - name: "Agent 1 (2x)"
+    resolutions: "2x"
+  - name: "Agent 2 (2x)"
+    resolutions: "2x"
+  - name: "Agent 3 (2x)"
+    resolutions: "2x"

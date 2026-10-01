@@ -1,0 +1,9 @@
+agents_num: 3
+rounds_num: 2
+agents:
+  - name: "Agent 1"
+    resolution: "2x"
+  - name: "Agent 2"
+    resolution: "2x"
+  - name: "Agent 3"
+    resolution: "2x"

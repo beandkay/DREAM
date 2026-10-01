@@ -17,6 +17,10 @@ def process_sample(args, general_config, sample, output_path, lock, global_token
     mad = MAD_METHOD(general_config, method_config_name=args.method_config_name)
     save_data = sample.copy()
     
+    # Do not save the image content to the output file to save space
+    for key in ["image", "image_url", "image_path"]:
+        save_data.pop(key, None)
+    
     # Start timing
     start_time = time.time()
     start_cpu_time = time.process_time()
@@ -80,8 +84,15 @@ if __name__ == "__main__":
     parser.add_argument("--test_dataset_name", type=str, default="example_math", help="The dataset to be used for testing.")
     parser.add_argument("--output_path", type=str, default=None, help="Path to the output file.")
     parser.add_argument("--require_val", action="store_true")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed for the LLM API.")
+    
+    # args related to teacher distillation (Approach A)
+    parser.add_argument("--teacher_ref_db_path", type=str, default=None,
+                        help="Path to teacher reference DB JSON (overrides method config).")
     
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--debug_query", type=str, default=None, help="Custom query to debug.")
+    parser.add_argument("--sample_idx", type=int, default=None, help="Index of sample to debug in the dataset.")
     parser.add_argument("--sequential", action="store_true")
     args = parser.parse_args()
     
@@ -90,11 +101,24 @@ if __name__ == "__main__":
     # Load model config
     model_api_config = load_model_api_config(args.model_api_config, args.model_name)
     general_config.update({"model_api_config": model_api_config})
+    general_config["test_dataset_name"] = args.test_dataset_name
     print("-"*50, f"\n>> Model API config: {model_api_config[args.model_name]}")
     
-    if args.debug:
+    if args.debug or args.debug_query is not None or args.sample_idx is not None:
+        general_config["debug"] = True
+        if args.debug_query is not None:
+            sample = {"query": args.debug_query}
+        elif args.sample_idx is not None:
+            # load dataset
+            with open(f"./datasets/data/{args.test_dataset_name}.json", "r") as f:
+                test_dataset = json.load(f)
+            sample = test_dataset[args.sample_idx]
+            print(f">> Debugging sample index {args.sample_idx}:")
+            print(json.dumps(sample, indent=4))
+        else:
+            sample = {"query": "If $|x+5|-|3x-6|=0$, find the largest possible value of $x$. Express your answer as an improper fraction."}
+            
         # MAD inference
-        sample = {"query": "If $|x+5|-|3x-6|=0$, find the largest possible value of $x$. Express your answer as an improper fraction."}
         MAD_METHOD = get_method_class(args.method_name, args.test_dataset_name)
         mad = MAD_METHOD(general_config, method_config_name=args.method_config_name)
 
@@ -102,6 +126,21 @@ if __name__ == "__main__":
         
         print(json.dumps(response, indent=4))
         print(f"\n>> Token stats: {json.dumps(mad.get_token_stats(), indent=4)}")
+        
+        # Save to debug json file
+        config_suffix = f"_{args.method_config_name}" if args.method_config_name else ""
+        debug_output_path = f"debug_results{config_suffix}.json"
+        
+        # Create a unified debug object containing the original query, the debate response, and token stats
+        debug_output = {
+            "sample": sample,
+            "response": response,
+            "token_stats": mad.get_token_stats()
+        }
+        
+        with open(debug_output_path, "w") as f:
+            json.dump(debug_output, f, indent=4)
+        print(f"\n>> Saved debug results to {debug_output_path}")
     
     else:
         print(f">> Method: {args.method_name} | Dataset: {args.test_dataset_name}")
@@ -118,7 +157,26 @@ if __name__ == "__main__":
                 val_dataset = json.load(f)
         
         # get output path
-        output_path = args.output_path if args.output_path is not None else f"./results/{args.test_dataset_name}/{args.model_name}/{args.method_name}_infer.jsonl"
+        if args.output_path is not None:
+            output_path = args.output_path
+        else:
+            # If a custom config is used, append its name to differentiate outputs automatically
+            config_suffix = ""
+            if args.method_config_name and args.method_config_name != "config_main":
+                config_suffix = f"_{args.method_config_name}"
+            
+            seed_suffix = f"_{args.seed}" if args.seed is not None else ""
+            
+            env_suffix = ""
+            if os.environ.get("VIF_YARD_SINK") == "1":
+                env_suffix += f"_yard-{os.environ.get('VIF_AGENT_ROLE', 'bal')}"
+            if os.environ.get("VIF_HIVE_MIND") == "1":
+                env_suffix += f"_hive-{os.environ.get('VIF_CROSS_ALPHA', '0.15')}"
+            if os.environ.get("GLOBAL_RESIDUAL_ALPHA") and float(os.environ.get("GLOBAL_RESIDUAL_ALPHA")) > 0:
+                env_suffix += f"_res-{os.environ.get('GLOBAL_RESIDUAL_ALPHA')}"
+
+            output_path = f"./results/{args.test_dataset_name}/{args.model_name}{seed_suffix}/{args.method_name}{config_suffix}{env_suffix}_infer.jsonl"
+
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         
         # reserve unprocessed samples

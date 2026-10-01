@@ -1,0 +1,13 @@
+num_players: 3
+max_round: 3
+agent_temperature: 0.5
+judge_temperature: 0.5
+routing_strategy: "gated_mix_res"
+gated_anll_threshold: 0.2
+adaptive_threshold: true
+resolutions: ["1.5x", "1x", "0.5x"]
+# enable_answer_rescue is read only by LLM_Debate/DMAD's history-aware aggregation.
+# Div-MAD has no rescue/history-aggregation mechanism (its judge is a fixed two-agent
+# aff/neg debate), so this key is a no-op here - kept only so run_mm.sh can load the
+# same --method_config_name across all three methods.
+enable_answer_rescue: false

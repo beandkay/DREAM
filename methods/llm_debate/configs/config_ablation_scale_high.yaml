@@ -1,0 +1,7 @@
+agents_num: 3
+rounds_num: 3
+judge_temperature: 0.5
+routing_strategy: "gated_mix_res"
+adaptive_threshold: true
+gated_anll_threshold: 0.2
+resolutions: ["3x", "2x", "1x"]

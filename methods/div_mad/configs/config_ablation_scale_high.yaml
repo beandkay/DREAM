@@ -1,0 +1,8 @@
+num_players: 3
+max_round: 3
+agent_temperature: 0.5
+judge_temperature: 0.5
+routing_strategy: "gated_mix_res"
+adaptive_threshold: true
+gated_anll_threshold: 0.2
+resolutions: ["3x", "2x", "1x"]

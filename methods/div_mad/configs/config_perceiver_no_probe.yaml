@@ -1,0 +1,10 @@
+num_players: 3
+max_round: 3
+
+# Static resolution (no probing)
+routing_strategy: "consensus_scaling"
+resolutions: ["1x"]
+
+# Perceiver settings
+use_perceiver: true
+perceiver_temperature: 0.2

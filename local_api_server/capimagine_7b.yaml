@@ -1,0 +1,8 @@
+# USING llamafactory, need to install llamafactory first
+
+model_name_or_path: Michael4933/CapImagine-7B
+template: qwen2_vl
+infer_backend: huggingface #choices: [huggingface, vllm]
+trust_remote_code: true
+
+# API_PORT=8000 CUDA_VISIBLE_DEVICES=0 llamafactory-cli api local_api_server/qwen2.5_14b.yaml

@@ -1,0 +1,10 @@
+agents_num: 3
+rounds_num: 3
+
+# Enable gated resolution probing before running perceiver
+routing_strategy: "gated_mix_res"
+resolutions: ["1.5x", "1x", "0.5x"]
+
+# Perceiver settings
+use_perceiver: true
+perceiver_temperature: 0.2

@@ -1,0 +1,9 @@
+agents_num: 3
+rounds_num: 3
+agents:
+  - name: "Agent 1 (Mixed Res)"
+    resolutions: ["2x", "0.5x", "1x"]
+  - name: "Agent 2 (Mixed Res)"
+    resolutions: ["2x", "0.5x", "1x"]
+  - name: "Agent 3 (Mixed Res)"
+    resolutions: ["2x", "0.5x", "1x"]

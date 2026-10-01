@@ -1,0 +1,14 @@
+text_strategies: [cot, sbp, pot]
+multimodal_strategies: [io, ccot, ddcot]
+max_round: 3
+agent_temperature: 0.5
+judge_temperature: 0.5
+return_all: true
+
+# Enable gated resolution probing before running perceiver
+routing_strategy: "gated_mix_res"
+resolutions: ["1.5x", "1x", "0.5x"]
+
+# Perceiver settings
+use_perceiver: true
+perceiver_temperature: 0.2

@@ -1,19 +1,192 @@
 {
     "gpt-4o-mini": {
         "model_list": [
-            {"model_name": "gpt-4o-mini", "model_url": "https://openai.com/api/v1", "api_key": "XXXXXX"}
+            {
+                "model_name": "openai/gpt-4o-mini",
+                "model_url": "https://openrouter.ai/api/v1/",
+                "api_key": "XXXXXX"
+            }
         ],
         "max_workers_per_model": 10
     },
-    "qwen-vl-7b-local": {
+    "claude-sonnet": {
         "model_list": [
-            {"model_name": "qwen2.5-vl-7b-instruct", "model_url": "http://localhost:8000/v1", "api_key": "local"}
+            {
+                "model_name": "claude-sonnet",
+                "model_url": "https://llmproxy.deakin.edu.au",
+                "api_key": "XXXXXX"
+            }
         ],
-        "max_workers_per_model": 1
+        "max_workers_per_model": 10,
+        "supports_logprobs": false
+    },
+    "qwen2.5-vl-7b-local": {
+        "model_list": [
+            {
+                "model_name": "qwen2.5-vl-7b-local",
+                "model_url": "http://localhost:38477/v1",
+                "api_key": "local"
+            }
+        ],
+        "max_workers_per_model": 10
+    },
+    "qwen2.5-vl-32b-local": {
+        "model_list": [
+            {
+                "model_name": "qwen2.5-vl-32b-local",
+                "model_url": "http://localhost:32322/v1",
+                "api_key": "local"
+            }
+        ],
+        "max_workers_per_model": 10
+    },
+    "qwen2.5-7b-local": {
+        "model_list": [
+            {
+                "model_name": "qwen2.5-7b-local",
+                "model_url": "http://localhost:2222/v1",
+                "api_key": "local"
+            }
+        ],
+        "max_workers_per_model": 10
+    },
+    "qwen2.5-14b-local": {
+        "model_list": [
+            {
+                "model_name": "qwen2.5-14b-local",
+                "model_url": "http://localhost:3333/v1",
+                "api_key": "local"
+            }
+        ],
+        "max_workers_per_model": 10
+    },
+    "qwen2.5-72b-local": {
+        "model_list": [
+            {
+                "model_name": "qwen2.5-72b-local",
+                "model_url": "http://localhost:9090/v1",
+                "api_key": "local"
+            }
+        ],
+        "max_workers_per_model": 10
     },
     "llama3.1-8b-local": {
         "model_list": [
-            {"model_name": "llama3.1-8b-instruct", "model_url": "http://localhost:8000/v1", "api_key": "local"}
+            {
+                "model_name": "llama3.1-8b-local",
+                "model_url": "http://localhost:4444/v1",
+                "api_key": "local"
+            }
+        ],
+        "max_workers_per_model": 10
+    },
+    "xverify-9b-c": {
+        "model_list": [
+            {
+                "model_name": "xverify-9b-c",
+                "model_url": "http://localhost:8010/v1",
+                "api_key": "local"
+            }
+        ],
+        "max_workers_per_model": 10
+    },
+    "lvr-7b-local": {
+        "model_list": [
+            {
+                "model_name": "lvr-7b-local",
+                "model_url": "http://localhost:5454/v1",
+                "api_key": "local"
+            }
+        ],
+        "max_workers_per_model": 10
+    },
+    "capimagine-7b-local": {
+        "model_list": [
+            {
+                "model_name": "capimagine-7b-local",
+                "model_url": "http://localhost:6565/v1",
+                "api_key": "local"
+            }
+        ],
+        "max_workers_per_model": 10
+    },
+    "internlm3-8b-local": {
+        "model_list": [
+            {
+                "model_name": "internlm3-8b-local",
+                "model_url": "http://localhost:7676/v1",
+                "api_key": "local"
+            }
+        ],
+        "max_workers_per_model": 10
+    },
+    "internvl3-8b-local": {
+        "model_list": [
+            {
+                "model_name": "internvl3-8b-local",
+                "model_url": "http://localhost:8787/v1",
+                "api_key": "local"
+            }
+        ],
+        "max_workers_per_model": 10
+    },
+    "internvl3-14b-local": {
+        "model_list": [
+            {
+                "model_name": "internvl3-14b-local",
+                "model_url": "http://localhost:36175/v1",
+                "api_key": "local"
+            }
+        ],
+        "max_workers_per_model": 10
+    },
+    "qwen3-8b-local": {
+        "model_list": [
+            {
+                "model_name": "qwen3-8b-local",
+                "model_url": "http://localhost:9898/v1",
+                "api_key": "local"
+            }
+        ],
+        "max_workers_per_model": 10
+    },
+    "llavanext-7b-local": {
+        "model_list": [
+            {
+                "model_name": "llavanext-7b-local",
+                "model_url": "http://localhost:51882/v1",
+                "api_key": "local"
+            }
+        ],
+        "max_workers_per_model": 10
+    },
+    "gemma3-27b-local": {
+        "model_list": [
+            {
+                "model_name": "gemma3-27b-local",
+                "model_url": "http://localhost:51442/v1",
+                "api_key": "local"
+            }
+        ],
+        "max_workers_per_model": 10
+    },
+    "gemma3-4b-local": {
+        "model_list": [
+            {
+                "model_name": "gemma3-4b-local",
+                "model_url": "http://localhost:51412/v1",
+                "api_key": "local"
+            }
+        ],
+        "max_workers_per_model": 10
+    },
+    "gemma3-12b-local": {
+        "model_list": [
+            {
+                "model_name": "gemma3-12b-local",
+                "model_url": "http://localhost:51142/v1",
+                "api_key": "local"
+            }
         ],
         "max_workers_per_model": 10
     }

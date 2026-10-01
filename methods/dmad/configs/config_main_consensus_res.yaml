@@ -1,0 +1,8 @@
+text_strategies: [cot, sbp, pot]
+multimodal_strategies: [io, ccot, ddcot]
+max_round: 3
+agent_temperature: 0.5
+judge_temperature: 0.5
+return_all: true
+routing_strategy: "consensus_scaling"
+resolutions: ["1.5x", "1x", "0.5x"]
